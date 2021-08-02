@@ -1,64 +1,62 @@
-provider "hcloud" {
-  token = var.hcloud_token
+terraform {
+  required_providers {
+    inncloud = {
+      source = "innatical/inncloud"
+      version = "0.0.2"
+    }
+    local = {
+      source = "hashicorp/local"
+      version = "2.1.0"
+    }
+  }
 }
 
-resource "hcloud_network" "private" {
-  name     = var.cluster_name
-  ip_range = "10.0.0.0/8"
+provider "inncloud" {
+    token = var.token
+    project_id = var.project_id
 }
 
-resource "hcloud_network_subnet" "subnet" {
-  network_id   = hcloud_network.private.id
-  type         = "cloud"
-  network_zone = "eu-central"
-  ip_range     = "10.0.0.0/24"
+resource "inncloud_server" "master" {
+    name = "${var.cluster_name}-master"
+    model = var.master_model
+    image = "ubuntu-20.04"
+    region = var.region
+    cycle = var.cycle
+
+    provisioner "remote-exec" {
+      inline = [
+        "apt install -y curl",
+        "mkdir /etc/systemd/system/k3s.service.d",
+        "echo '[Service]\nExecStart=\nExecStart=-/usr/local/bin/k3s server --snapshotter native' > /etc/systemd/system/k3s.service.d/override.conf",
+        "ln -s /dev/console /dev/kmsg",
+        "curl -sfL https://get.k3s.io | sh -"
+      ]
+
+        connection {
+            type     = "ssh"
+            user     = "root"
+            host     = inncloud_server.master.ip
+        }
+    }
+
+     provisioner "local-exec" {
+        command = "ssh -o StrictHostKeyChecking=no root@${inncloud_server.master.ip} 'cat /var/lib/rancher/k3s/server/node-token' > /tmp/k3s_token"
+    }
 }
 
-resource "random_string" "k3s_token" {
-  length  = 48
-  upper   = false
-  special = false
-}
-
-module "master" {
-  source = "./modules/master"
-
-  cluster_name = var.cluster_name
-  datacenter   = var.datacenter
-  image        = var.image
-  node_type    = var.master_type
-  ssh_keys     = var.ssh_keys
-
-  hcloud_network_id = hcloud_network.private.id
-  hcloud_subnet_id  = hcloud_network_subnet.subnet.id
-
-  k3s_token   = random_string.k3s_token.result
-  k3s_channel = var.k3s_channel
-
-  hcloud_token = var.hcloud_token
+data "local_file" "k3s_token" {
+    filename = "/tmp/k3s_token"
+    depends_on = [inncloud_server.master]
 }
 
 module "node_group" {
-  source       = "./modules/node_group"
-  cluster_name = var.cluster_name
-  datacenter   = var.datacenter
-  image        = var.image
-  ssh_keys     = var.ssh_keys
-  master_ipv4  = module.master.master_ipv4
-
-  hcloud_subnet_id = hcloud_network_subnet.subnet.id
-
-  k3s_token   = random_string.k3s_token.result
-  k3s_channel = var.k3s_channel
-
-  for_each   = var.node_groups
-  node_type  = each.key
-  node_count = each.value
+    source       = "./modules/node_group"
+    cluster_name = var.cluster_name
+    region   = var.region
+    master_ip = inncloud_server.master.ip
+    token = chomp(data.local_file.k3s_token.content)
+    for_each   = var.node_groups
+    model  = each.key
+    node_count = each.value
+    depends_on = [inncloud_server.master, data.local_file.k3s_token]
 }
-
-module "kubeconfig" {
-  source       = "./modules/kubeconfig"
-  cluster_name = var.cluster_name
-  master_ipv4  = module.master.master_ipv4
-}
-

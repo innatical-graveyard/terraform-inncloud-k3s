@@ -1,29 +1,32 @@
-data "template_file" "node_init" {
-  template = file("${path.module}/templates/init.sh")
-  vars = {
-    k3s_token   = var.k3s_token
-    k3s_channel = var.k3s_channel
-
-    master_ipv4 = var.master_ipv4
+terraform {
+  required_providers {
+    inncloud = {
+      source = "innatical/inncloud"
+      version = "0.0.2"
+    }
   }
 }
 
-resource "hcloud_server" "node" {
-  count       = var.node_count
-  name        = "${var.cluster_name}-${var.node_type}-${count.index}"
-  server_type = var.node_type
-  datacenter  = var.datacenter
-  image       = var.image
-  ssh_keys    = var.ssh_keys
-  user_data   = data.template_file.node_init.rendered
-}
+resource "inncloud_server" "node" {
+    count       = var.node_count
+    name        = "${var.cluster_name}-${var.model}-${count.index}"
+    model       = var.model
+    region      = var.region
+    image       = "ubuntu-20.04"
+    cycle       = var.cycle
 
-resource "hcloud_server_network" "node" {
-  count     = var.node_count
-  server_id = hcloud_server.node[count.index].id
-  subnet_id = var.hcloud_subnet_id
-}
+    provisioner "remote-exec" {
+      inline = [
+          "apt install -y curl",
+          "mkdir /etc/systemd/system/k3s-agent.service.d",
+          "echo '[Service]\nExecStart=\nExecStart=-/usr/local/bin/k3s agent --snapshotter native' > /etc/systemd/system/k3s-agent.service.d/override.conf",
+          "curl -sfL https://get.k3s.io | K3S_URL=https://${var.master_ip}:6443 K3S_TOKEN=${var.token} sh -"
+      ]
 
-output "node_ipv4" {
-  value = hcloud_server.node.*.ipv4_address
+        connection {
+            type     = "ssh"
+            user     = "root"
+            host     = self.ip
+        }
+    }
 }
