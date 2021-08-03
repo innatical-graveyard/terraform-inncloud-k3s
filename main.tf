@@ -25,10 +25,6 @@ resource "inncloud_server" "master" {
 
     provisioner "remote-exec" {
       inline = [
-        "apt install -y curl",
-        "mkdir /etc/systemd/system/k3s.service.d",
-        "echo '[Service]\nExecStart=\nExecStart=-/usr/local/bin/k3s server --snapshotter native' > /etc/systemd/system/k3s.service.d/override.conf",
-        "ln -s /dev/console /dev/kmsg",
         "curl -sfL https://get.k3s.io | sh -"
       ]
 
